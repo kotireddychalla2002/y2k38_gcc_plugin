@@ -33,7 +33,7 @@
 int plugin_is_GPL_compatible;
 __attribute__((unused))
 static struct plugin_info my_plugin_info = {
-    .version = "8.0-Final-Complete",
+    .version = "8.1-InitExpr-Fix",
     .help = "Detects 64-to-32 bit narrowing and other lossy numeric conversions.\n"
 };
 
@@ -86,8 +86,8 @@ static tree get_original_type(tree expr) {
     while (current_expr && (TREE_CODE(current_expr) == NOP_EXPR 
                          || TREE_CODE(current_expr) == CONVERT_EXPR
                          || TREE_CODE(current_expr) == VIEW_CONVERT_EXPR
-                         || TREE_CODE(current_expr) == FLOAT_EXPR      // FIX: Handle int->float conversion node
-                         || TREE_CODE(current_expr) == FIX_TRUNC_EXPR // FIX: Handle float->int conversion node
+                         || TREE_CODE(current_expr) == FLOAT_EXPR
+                         || TREE_CODE(current_expr) == FIX_TRUNC_EXPR
                          )) {
         current_expr = TREE_OPERAND(current_expr, 0);
         DEBUG_PRINT("      peeled to: %s\n", get_tree_code_name(TREE_CODE(current_expr)));
@@ -191,6 +191,20 @@ static void traverse_and_check_ast(tree node, walk_data* data) {
             tree lhs = TREE_OPERAND(node, 0);
             tree rhs = TREE_OPERAND(node, 1);
             check_narrowing_conversion(loc, TREE_TYPE(lhs), rhs, "assignment");
+            break;
+        }
+        // FIX: Add a case for INIT_EXPR to catch initializations like `int y = func();`
+        case INIT_EXPR: {
+            tree dest = TREE_OPERAND(node, 0);
+            tree source = TREE_OPERAND(node, 1);
+            if (dest && source && TREE_TYPE(dest)) {
+                 // FIX: Get location from the destination variable declaration, which is more reliable.
+                 location_t reliable_loc = loc;
+                 if (TREE_CODE(dest) == VAR_DECL) {
+                     reliable_loc = DECL_SOURCE_LOCATION(dest);
+                 }
+                 check_narrowing_conversion(reliable_loc, TREE_TYPE(dest), source, "initializer expression");
+            }
             break;
         }
         case CALL_EXPR: { // Handle function calls
@@ -358,5 +372,6 @@ int plugin_init(struct plugin_name_args *plugin_info, struct plugin_gcc_version 
 
     return 0;
 }
+
 
 
