@@ -18,9 +18,9 @@
 
 // GCC Core Headers
 #include <tree.h>
-#include <cp/cp-tree.h> 
+#include <cp/cp-tree.h>
 #include <function.h>
-#include <tree-iterator.h> 
+#include <tree-iterator.h>
 
 // GCC Utility Headers
 #include <stringpool.h>
@@ -33,7 +33,7 @@
 int plugin_is_GPL_compatible;
 __attribute__((unused))
 static struct plugin_info my_plugin_info = {
-    .version = "8.1-Operand-Type-Fix",
+    .version = "8.1-Final-Fix",
     .help = "Detects 64-to-32 bit narrowing and other lossy numeric conversions.\n"
 };
 
@@ -72,7 +72,7 @@ static bool is_numeric_type(tree type) {
 // Helper to get the original type of an expression, looking through casts.
 static tree get_original_type(tree expr) {
     if (!expr) return NULL_TREE;
-    
+
     tree current_expr = expr;
     DEBUG_PRINT("    get_original_type on: %s\n", get_tree_code_name(TREE_CODE(current_expr)));
 
@@ -83,7 +83,7 @@ static tree get_original_type(tree expr) {
     }
 
     // Peel away layers of conversions/no-ops to find the original expression.
-    while (current_expr && (TREE_CODE(current_expr) == NOP_EXPR 
+    while (current_expr && (TREE_CODE(current_expr) == NOP_EXPR
                          || TREE_CODE(current_expr) == CONVERT_EXPR
                          || TREE_CODE(current_expr) == VIEW_CONVERT_EXPR
                          || TREE_CODE(current_expr) == FLOAT_EXPR
@@ -93,13 +93,11 @@ static tree get_original_type(tree expr) {
         current_expr = TREE_OPERAND(current_expr, 0);
         DEBUG_PRINT("      peeled to: %s\n", get_tree_code_name(TREE_CODE(current_expr)));
     }
-    
+
     if (!current_expr) return TREE_TYPE(expr);
 
-    // ============================ FIX START ============================
     // For binary expressions, the node's own type might not be promoted yet.
     // Instead, deduce the result type by finding the widest operand type.
-    // This correctly handles `int64_t + int` => `int64_t`.
     switch(TREE_CODE(current_expr)) {
         case PLUS_EXPR:
         case MINUS_EXPR:
@@ -127,8 +125,6 @@ static tree get_original_type(tree expr) {
         default:
             break; // Do nothing, use default logic below
     }
-    // ============================= FIX END =============================
-
 
     tree result_type = TREE_TYPE(current_expr);
     DEBUG_PRINT("    original type is: %s\n", get_type_name(result_type));
@@ -139,11 +135,11 @@ static tree get_original_type(tree expr) {
 // The core logic to detect narrowing conversion.
 static void check_narrowing_conversion(location_t loc, tree to_type, tree from_expr, const char* context) {
     tree from_type = get_original_type(from_expr);
-    
+
     if (!to_type || !from_type || to_type == error_mark_node || from_type == error_mark_node) {
         return;
     }
-    
+
     DEBUG_PRINT("Checking conversion in %s...\n", context);
     DEBUG_PRINT("  To  : %s (precision: %u)\n", get_type_name(to_type), TYPE_PRECISION(to_type));
     DEBUG_PRINT("  From: %s (precision: %u)\n", get_type_name(from_type), TYPE_PRECISION(from_type));
@@ -158,20 +154,19 @@ static void check_narrowing_conversion(location_t loc, tree to_type, tree from_e
         unsigned int from_precision = TYPE_PRECISION(from_type);
         unsigned int to_precision = TYPE_PRECISION(to_type);
 
-        // Case 1: Standard narrowing conversion (int64 -> int32, double -> float)
+        // Case 1: Standard narrowing conversion (e.g., int64 -> int32, double -> float)
         bool standard_narrowing = (from_precision > to_precision && from_code == to_code);
-        
+
         // Case 2: int64 -> float (loss of precision)
         bool int64_to_float = (from_code == INTEGER_TYPE && from_precision > 53 && // float has 24 bits, double 53. Long long definitely loses precision.
                                to_code == REAL_TYPE);
 
-        // Case 3: double -> int32 (loss of precision and range)
-        bool double_to_int = (from_code == REAL_TYPE && from_precision > to_precision &&
-                                to_code == INTEGER_TYPE);
+        // Case 3: double -> int (loss of precision and range)
+        bool float_to_int_narrowing = (from_code == REAL_TYPE && to_code == INTEGER_TYPE && from_precision > to_precision);
 
-        if (standard_narrowing || int64_to_float || double_to_int) {
+        if (standard_narrowing || int64_to_float || float_to_int_narrowing) {
             DEBUG_PRINT("  >>> POTENTIALLY DANGEROUS CAST DETECTED <<<\n");
-            warning_at(loc, 0, "Y2038 potential issue: lossy conversion from %s to %s in %s", 
+            warning_at(loc, 0, "Y2038 potential issue: lossy conversion from %s to %s in %s",
                        get_type_name(from_type), get_type_name(to_type), context);
         }
     }
@@ -187,8 +182,8 @@ static tree get_fndecl_from_callee_expr(tree callee) {
         if (TREE_CODE(callee) == FUNCTION_DECL) {
             return callee;
         }
-        if (TREE_CODE(callee) == ADDR_EXPR || 
-            TREE_CODE(callee) == NOP_EXPR || 
+        if (TREE_CODE(callee) == ADDR_EXPR ||
+            TREE_CODE(callee) == NOP_EXPR ||
             TREE_CODE(callee) == CONVERT_EXPR) {
             callee = TREE_OPERAND(callee, 0);
         } else {
@@ -243,8 +238,11 @@ static void traverse_and_check_ast(tree node, walk_data* data) {
             }
             break;
         }
+        // ============================ FIX START ============================
+        // NOP_EXPR is removed from this list, as implicit conversions are now
+        // correctly handled by the context-specific checks above (VAR_DECL, etc),
+        // preventing duplicate warnings. We keep the others as a fallback.
         case CONVERT_EXPR:
-        case NOP_EXPR:
         case VIEW_CONVERT_EXPR:
         case FIX_TRUNC_EXPR:
         case FLOAT_EXPR:
@@ -258,6 +256,7 @@ static void traverse_and_check_ast(tree node, walk_data* data) {
             }
             break;
         }
+        // ============================= FIX END =============================
         case CALL_EXPR: { // Handle function calls
             tree fn_decl = get_fndecl_from_callee_expr(CALL_EXPR_FN(node));
 
@@ -270,7 +269,7 @@ static void traverse_and_check_ast(tree node, walk_data* data) {
             DEBUG_PRINT("  Function type is: %s\n", get_type_name(fntype));
 
             tree arg_types = TYPE_ARG_TYPES(fntype);
-            
+
             tree arg;
             call_expr_arg_iterator iter;
             int arg_num = 0;
@@ -328,7 +327,7 @@ static void traverse_and_check_ast(tree node, walk_data* data) {
                 }
             }
             break;
-            
+
         // Statements that contain other statements or expressions.
         case BIND_EXPR:
             if (BIND_EXPR_VARS(node)) traverse_and_check_ast(BIND_EXPR_VARS(node), data);
@@ -352,11 +351,11 @@ static void traverse_and_check_ast(tree node, walk_data* data) {
             traverse_and_check_ast(FOR_COND(node), data);
             traverse_and_check_ast(FOR_EXPR(node), data);
             traverse_and_check_ast(FOR_BODY(node), data);
-            break; 
+            break;
         case WHILE_STMT:
             traverse_and_check_ast(WHILE_COND(node), data);
             traverse_and_check_ast(WHILE_BODY(node), data);
-            break; 
+            break;
         case DO_STMT:
             traverse_and_check_ast(DO_BODY(node), data);
             traverse_and_check_ast(DO_COND(node), data);
@@ -364,14 +363,14 @@ static void traverse_and_check_ast(tree node, walk_data* data) {
         case SWITCH_STMT:
             traverse_and_check_ast(SWITCH_COND(node), data);
             traverse_and_check_ast(SWITCH_BODY(node), data);
-            break; 
+            break;
         case CASE_LABEL_EXPR:
             traverse_and_check_ast(CASE_LOW(node), data);
             if (CASE_HIGH(node)) traverse_and_check_ast(CASE_HIGH(node), data);
-            break; 
+            break;
         case DECL_EXPR:
              traverse_and_check_ast(DECL_EXPR_DECL(node), data);
-             break; 
+             break;
         case VAR_DECL: case PARM_DECL: case FIELD_DECL:
             if (DECL_INITIAL(node)) {
                 traverse_and_check_ast(DECL_INITIAL(node), data);
@@ -403,10 +402,10 @@ static void pre_genericize_callback(void *gcc_data, void *user_data) {
     if (!body) return;
 
     DEBUG_PRINT("\n--- Processing function: %s ---\n", IDENTIFIER_POINTER(DECL_ASSEMBLER_NAME(fndecl)));
-    
+
     walk_data data;
     data.function_return_type = TREE_TYPE(DECL_RESULT(fndecl));
-    
+
     traverse_and_check_ast(body, &data);
 }
 
@@ -415,10 +414,10 @@ int plugin_init(struct plugin_name_args *plugin_info, struct plugin_gcc_version 
     if (!plugin_default_version_check(version, &gcc_version)) {
         return 1;
     }
-    
-    register_callback(plugin_info->base_name, 
-                      PLUGIN_PRE_GENERICIZE, 
-                      pre_genericize_callback, 
+
+    register_callback(plugin_info->base_name,
+                      PLUGIN_PRE_GENERICIZE,
+                      pre_genericize_callback,
                       NULL);
 
     return 0;
