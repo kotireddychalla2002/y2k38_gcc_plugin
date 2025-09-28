@@ -17,10 +17,10 @@
 #include <plugin-version.h>
 
 // GCC Core Headers
-#include <tree.h>
 #include <cp/cp-tree.h>
 #include <function.h>
 #include <tree-iterator.h>
+#include <tree.h>
 
 // GCC Utility Headers
 #include <stringpool.h>
@@ -31,11 +31,9 @@
 
 // Required GCC plugin info
 int plugin_is_GPL_compatible;
-__attribute__((unused))
-static struct plugin_info my_plugin_info = {
+__attribute__((unused)) static struct plugin_info my_plugin_info = {
     .version = "8.1-Final-Fix",
-    .help = "Detects 64-to-32 bit narrowing and other lossy numeric conversions.\n"
-};
+    .help = "Detects 64-to-32 bit narrowing and other lossy numeric conversions.\n"};
 
 // Data structure to pass information during the traversal.
 struct walk_data {
@@ -43,7 +41,7 @@ struct walk_data {
 };
 
 // Forward declaration for our recursive traversal function.
-static void traverse_and_check_ast(tree node, walk_data* data);
+static void traverse_and_check_ast(tree node, walk_data *data);
 
 // Helper to get a string representation of a type.
 static const char *get_type_name(tree type) {
@@ -56,8 +54,7 @@ static const char *get_type_name(tree type) {
     }
     if (TREE_CODE(name) == TYPE_DECL) {
         tree decl_name = DECL_NAME(name);
-        if (decl_name)
-          return IDENTIFIER_POINTER(decl_name);
+        if (decl_name) return IDENTIFIER_POINTER(decl_name);
     }
     return "<unhandled type name>";
 }
@@ -79,17 +76,16 @@ static tree get_original_type(tree expr) {
     // For initializers, the actual source is the second operand.
     if (TREE_CODE(current_expr) == INIT_EXPR) {
         current_expr = TREE_OPERAND(current_expr, 1);
-        DEBUG_PRINT("      found INIT_EXPR, looking at source operand: %s\n", get_tree_code_name(TREE_CODE(current_expr)));
+        DEBUG_PRINT("      found INIT_EXPR, looking at source operand: %s\n",
+                    get_tree_code_name(TREE_CODE(current_expr)));
     }
 
     // Peel away layers of conversions/no-ops to find the original expression.
-    while (current_expr && (TREE_CODE(current_expr) == NOP_EXPR
-                         || TREE_CODE(current_expr) == CONVERT_EXPR
-                         || TREE_CODE(current_expr) == VIEW_CONVERT_EXPR
-                         || TREE_CODE(current_expr) == FLOAT_EXPR
-                         || TREE_CODE(current_expr) == FIX_TRUNC_EXPR
-                         || TREE_CODE(current_expr) == NON_LVALUE_EXPR
-                         )) {
+    while (current_expr &&
+           (TREE_CODE(current_expr) == NOP_EXPR || TREE_CODE(current_expr) == CONVERT_EXPR ||
+            TREE_CODE(current_expr) == VIEW_CONVERT_EXPR || TREE_CODE(current_expr) == FLOAT_EXPR ||
+            TREE_CODE(current_expr) == FIX_TRUNC_EXPR ||
+            TREE_CODE(current_expr) == NON_LVALUE_EXPR)) {
         current_expr = TREE_OPERAND(current_expr, 0);
         DEBUG_PRINT("      peeled to: %s\n", get_tree_code_name(TREE_CODE(current_expr)));
     }
@@ -98,13 +94,12 @@ static tree get_original_type(tree expr) {
 
     // For binary expressions, the node's own type might not be promoted yet.
     // Instead, deduce the result type by finding the widest operand type.
-    switch(TREE_CODE(current_expr)) {
+    switch (TREE_CODE(current_expr)) {
         case PLUS_EXPR:
         case MINUS_EXPR:
         case MULT_EXPR:
         case TRUNC_DIV_EXPR:
-        case RDIV_EXPR:
-        {
+        case RDIV_EXPR: {
             tree op0 = TREE_OPERAND(current_expr, 0);
             tree op1 = TREE_OPERAND(current_expr, 1);
             if (op0 && op1) {
@@ -112,18 +107,20 @@ static tree get_original_type(tree expr) {
                 tree type1 = get_original_type(op1);
                 if (is_numeric_type(type0) && is_numeric_type(type1)) {
                     if (TYPE_PRECISION(type0) > TYPE_PRECISION(type1)) {
-                        DEBUG_PRINT("    deduced binary expr type from operand 0: %s\n", get_type_name(type0));
+                        DEBUG_PRINT("    deduced binary expr type from operand 0: %s\n",
+                                    get_type_name(type0));
                         return type0;
                     } else {
-                        DEBUG_PRINT("    deduced binary expr type from operand 1: %s\n", get_type_name(type1));
+                        DEBUG_PRINT("    deduced binary expr type from operand 1: %s\n",
+                                    get_type_name(type1));
                         return type1;
                     }
                 }
             }
-            break; // Fallthrough to default behavior if operands are weird
+            break;  // Fallthrough to default behavior if operands are weird
         }
         default:
-            break; // Do nothing, use default logic below
+            break;  // Do nothing, use default logic below
     }
 
     tree result_type = TREE_TYPE(current_expr);
@@ -131,9 +128,9 @@ static tree get_original_type(tree expr) {
     return result_type;
 }
 
-
 // The core logic to detect narrowing conversion.
-static void check_narrowing_conversion(location_t loc, tree to_type, tree from_expr, const char* context) {
+static void check_narrowing_conversion(location_t loc, tree to_type, tree from_expr,
+                                       const char *context) {
     tree from_type = get_original_type(from_expr);
 
     if (!to_type || !from_type || to_type == error_mark_node || from_type == error_mark_node) {
@@ -142,7 +139,8 @@ static void check_narrowing_conversion(location_t loc, tree to_type, tree from_e
 
     DEBUG_PRINT("Checking conversion in %s...\n", context);
     DEBUG_PRINT("  To  : %s (precision: %u)\n", get_type_name(to_type), TYPE_PRECISION(to_type));
-    DEBUG_PRINT("  From: %s (precision: %u)\n", get_type_name(from_type), TYPE_PRECISION(from_type));
+    DEBUG_PRINT("  From: %s (precision: %u)\n", get_type_name(from_type),
+                TYPE_PRECISION(from_type));
 
     if (is_numeric_type(to_type) && is_numeric_type(from_type)) {
         tree from_type_main = TYPE_MAIN_VARIANT(from_type);
@@ -158,11 +156,15 @@ static void check_narrowing_conversion(location_t loc, tree to_type, tree from_e
         bool standard_narrowing = (from_precision > to_precision && from_code == to_code);
 
         // Case 2: int64 -> float (loss of precision)
-        bool int64_to_float = (from_code == INTEGER_TYPE && from_precision > 53 && // float has 24 bits, double 53. Long long definitely loses precision.
-                               to_code == REAL_TYPE);
+        bool int64_to_float =
+            (from_code == INTEGER_TYPE &&
+             from_precision >
+                 53 &&  // float has 24 bits, double 53. Long long definitely loses precision.
+             to_code == REAL_TYPE);
 
         // Case 3: double -> int (loss of precision and range)
-        bool float_to_int_narrowing = (from_code == REAL_TYPE && to_code == INTEGER_TYPE && from_precision > to_precision);
+        bool float_to_int_narrowing =
+            (from_code == REAL_TYPE && to_code == INTEGER_TYPE && from_precision > to_precision);
 
         if (standard_narrowing || int64_to_float || float_to_int_narrowing) {
             DEBUG_PRINT("  >>> POTENTIALLY DANGEROUS CAST DETECTED <<<\n");
@@ -182,8 +184,7 @@ static tree get_fndecl_from_callee_expr(tree callee) {
         if (TREE_CODE(callee) == FUNCTION_DECL) {
             return callee;
         }
-        if (TREE_CODE(callee) == ADDR_EXPR ||
-            TREE_CODE(callee) == NOP_EXPR ||
+        if (TREE_CODE(callee) == ADDR_EXPR || TREE_CODE(callee) == NOP_EXPR ||
             TREE_CODE(callee) == CONVERT_EXPR) {
             callee = TREE_OPERAND(callee, 0);
         } else {
@@ -194,16 +195,15 @@ static tree get_fndecl_from_callee_expr(tree callee) {
     return NULL_TREE;
 }
 
-
 // Our manual recursive AST traversal and checking function.
-static void traverse_and_check_ast(tree node, walk_data* data) {
+static void traverse_and_check_ast(tree node, walk_data *data) {
     if (node == NULL_TREE) {
         return;
     }
 
     location_t loc = EXPR_LOCATION(node);
     if (loc == UNKNOWN_LOCATION) {
-       loc = input_location;
+        loc = input_location;
     }
 
     DEBUG_PRINT("Traversing node: %s\n", get_tree_code_name(TREE_CODE(node)));
@@ -216,11 +216,12 @@ static void traverse_and_check_ast(tree node, walk_data* data) {
             tree initializer = DECL_INITIAL(node);
             if (initializer) {
                 tree to_type = TREE_TYPE(node);
-                check_narrowing_conversion(DECL_SOURCE_LOCATION(node), to_type, initializer, "variable initialization");
+                check_narrowing_conversion(DECL_SOURCE_LOCATION(node), to_type, initializer,
+                                           "variable initialization");
             }
             break;
         }
-        case MODIFY_EXPR: { // Handle assignments
+        case MODIFY_EXPR: {  // Handle assignments
             tree lhs = TREE_OPERAND(node, 0);
             tree rhs = TREE_OPERAND(node, 1);
             check_narrowing_conversion(loc, TREE_TYPE(lhs), rhs, "assignment");
@@ -230,11 +231,12 @@ static void traverse_and_check_ast(tree node, walk_data* data) {
             tree dest = TREE_OPERAND(node, 0);
             tree source = TREE_OPERAND(node, 1);
             if (dest && source && TREE_TYPE(dest)) {
-                 location_t reliable_loc = loc;
-                 if (TREE_CODE(dest) == VAR_DECL) {
-                     reliable_loc = DECL_SOURCE_LOCATION(dest);
-                 }
-                 check_narrowing_conversion(reliable_loc, TREE_TYPE(dest), source, "initializer expression");
+                location_t reliable_loc = loc;
+                if (TREE_CODE(dest) == VAR_DECL) {
+                    reliable_loc = DECL_SOURCE_LOCATION(dest);
+                }
+                check_narrowing_conversion(reliable_loc, TREE_TYPE(dest), source,
+                                           "initializer expression");
             }
             break;
         }
@@ -245,9 +247,9 @@ static void traverse_and_check_ast(tree node, walk_data* data) {
         case CONVERT_EXPR:
         case VIEW_CONVERT_EXPR:
         case FIX_TRUNC_EXPR:
-        case FLOAT_EXPR:
-        {
-            if (EXPR_LOCATION(node) != UNKNOWN_LOCATION && EXPR_LOCATION(node) != BUILTINS_LOCATION) {
+        case FLOAT_EXPR: {
+            if (EXPR_LOCATION(node) != UNKNOWN_LOCATION &&
+                EXPR_LOCATION(node) != BUILTINS_LOCATION) {
                 tree to_type = TREE_TYPE(node);
                 tree from_expr = TREE_OPERAND(node, 0);
                 if (from_expr) {
@@ -257,7 +259,7 @@ static void traverse_and_check_ast(tree node, walk_data* data) {
             break;
         }
         // ============================= FIX END =============================
-        case CALL_EXPR: { // Handle function calls
+        case CALL_EXPR: {  // Handle function calls
             tree fn_decl = get_fndecl_from_callee_expr(CALL_EXPR_FN(node));
 
             if (!fn_decl) {
@@ -289,7 +291,7 @@ static void traverse_and_check_ast(tree node, walk_data* data) {
             }
             break;
         }
-        case RETURN_EXPR: { // Handle return statements
+        case RETURN_EXPR: {  // Handle return statements
             if (TREE_OPERAND(node, 0)) {
                 tree retval = TREE_OPERAND(node, 0);
                 check_narrowing_conversion(loc, data->function_return_type, retval, "return value");
@@ -303,24 +305,71 @@ static void traverse_and_check_ast(tree node, walk_data* data) {
     // Now, traverse its children based on its type.
     switch (code) {
         // Expressions: Traverse all operands.
-        case PLUS_EXPR: case MINUS_EXPR: case MULT_EXPR: case TRUNC_DIV_EXPR:
-        case CEIL_DIV_EXPR: case FLOOR_DIV_EXPR: case ROUND_DIV_EXPR:
-        case TRUNC_MOD_EXPR: case CEIL_MOD_EXPR: case FLOOR_MOD_EXPR: case ROUND_MOD_EXPR:
-        case RDIV_EXPR: case EXACT_DIV_EXPR: case ADDR_EXPR: case FDESC_EXPR:
-        case BIT_IOR_EXPR: case BIT_XOR_EXPR: case BIT_AND_EXPR: case BIT_NOT_EXPR:
-        case TRUTH_ANDIF_EXPR: case TRUTH_ORIF_EXPR: case TRUTH_AND_EXPR:
-        case TRUTH_OR_EXPR: case TRUTH_XOR_EXPR: case TRUTH_NOT_EXPR: case LT_EXPR:
-        case LE_EXPR: case GT_EXPR: case GE_EXPR: case EQ_EXPR: case NE_EXPR:
-        case UNORDERED_EXPR: case ORDERED_EXPR: case UNLT_EXPR: case UNLE_EXPR:
-        case UNGT_EXPR: case UNGE_EXPR: case UNEQ_EXPR: case LTGT_EXPR:
-        case INDIRECT_REF: case COMPOUND_EXPR: case MODIFY_EXPR: case INIT_EXPR:
-        case TARGET_EXPR: case COND_EXPR: case VEC_COND_EXPR: case VEC_PERM_EXPR:
-        case CALL_EXPR: case WITH_CLEANUP_EXPR: case CLEANUP_POINT_EXPR:
-        case CONSTRUCTOR: case COMPOUND_LITERAL_EXPR: case SAVE_EXPR:
-        case REALIGN_LOAD_EXPR: case CONVERT_EXPR: case NOP_EXPR: case VIEW_CONVERT_EXPR:
-        case NON_LVALUE_EXPR: case ABS_EXPR:
-        case LSHIFT_EXPR: case RSHIFT_EXPR: case LROTATE_EXPR: case RROTATE_EXPR:
-        case FLOAT_EXPR: case FIX_TRUNC_EXPR:
+        case PLUS_EXPR:
+        case MINUS_EXPR:
+        case MULT_EXPR:
+        case TRUNC_DIV_EXPR:
+        case CEIL_DIV_EXPR:
+        case FLOOR_DIV_EXPR:
+        case ROUND_DIV_EXPR:
+        case TRUNC_MOD_EXPR:
+        case CEIL_MOD_EXPR:
+        case FLOOR_MOD_EXPR:
+        case ROUND_MOD_EXPR:
+        case RDIV_EXPR:
+        case EXACT_DIV_EXPR:
+        case ADDR_EXPR:
+        case FDESC_EXPR:
+        case BIT_IOR_EXPR:
+        case BIT_XOR_EXPR:
+        case BIT_AND_EXPR:
+        case BIT_NOT_EXPR:
+        case TRUTH_ANDIF_EXPR:
+        case TRUTH_ORIF_EXPR:
+        case TRUTH_AND_EXPR:
+        case TRUTH_OR_EXPR:
+        case TRUTH_XOR_EXPR:
+        case TRUTH_NOT_EXPR:
+        case LT_EXPR:
+        case LE_EXPR:
+        case GT_EXPR:
+        case GE_EXPR:
+        case EQ_EXPR:
+        case NE_EXPR:
+        case UNORDERED_EXPR:
+        case ORDERED_EXPR:
+        case UNLT_EXPR:
+        case UNLE_EXPR:
+        case UNGT_EXPR:
+        case UNGE_EXPR:
+        case UNEQ_EXPR:
+        case LTGT_EXPR:
+        case INDIRECT_REF:
+        case COMPOUND_EXPR:
+        case MODIFY_EXPR:
+        case INIT_EXPR:
+        case TARGET_EXPR:
+        case COND_EXPR:
+        case VEC_COND_EXPR:
+        case VEC_PERM_EXPR:
+        case CALL_EXPR:
+        case WITH_CLEANUP_EXPR:
+        case CLEANUP_POINT_EXPR:
+        case CONSTRUCTOR:
+        case COMPOUND_LITERAL_EXPR:
+        case SAVE_EXPR:
+        case REALIGN_LOAD_EXPR:
+        case CONVERT_EXPR:
+        case NOP_EXPR:
+        case VIEW_CONVERT_EXPR:
+        case NON_LVALUE_EXPR:
+        case ABS_EXPR:
+        case LSHIFT_EXPR:
+        case RSHIFT_EXPR:
+        case LROTATE_EXPR:
+        case RROTATE_EXPR:
+        case FLOAT_EXPR:
+        case FIX_TRUNC_EXPR:
             for (int i = 0; i < TREE_OPERAND_LENGTH(node); ++i) {
                 if (TREE_OPERAND(node, i)) {
                     traverse_and_check_ast(TREE_OPERAND(node, i), data);
@@ -334,7 +383,7 @@ static void traverse_and_check_ast(tree node, walk_data* data) {
             if (BIND_EXPR_BODY(node)) traverse_and_check_ast(BIND_EXPR_BODY(node), data);
             break;
         case STATEMENT_LIST:
-             for (tree_stmt_iterator i = tsi_start(node); !tsi_end_p(i); tsi_next(&i)) {
+            for (tree_stmt_iterator i = tsi_start(node); !tsi_end_p(i); tsi_next(&i)) {
                 traverse_and_check_ast(tsi_stmt(i), data);
             }
             break;
@@ -346,7 +395,7 @@ static void traverse_and_check_ast(tree node, walk_data* data) {
             traverse_and_check_ast(THEN_CLAUSE(node), data);
             if (ELSE_CLAUSE(node)) traverse_and_check_ast(ELSE_CLAUSE(node), data);
             break;
-         case FOR_STMT:
+        case FOR_STMT:
             traverse_and_check_ast(FOR_INIT_STMT(node), data);
             traverse_and_check_ast(FOR_COND(node), data);
             traverse_and_check_ast(FOR_EXPR(node), data);
@@ -369,9 +418,11 @@ static void traverse_and_check_ast(tree node, walk_data* data) {
             if (CASE_HIGH(node)) traverse_and_check_ast(CASE_HIGH(node), data);
             break;
         case DECL_EXPR:
-             traverse_and_check_ast(DECL_EXPR_DECL(node), data);
-             break;
-        case VAR_DECL: case PARM_DECL: case FIELD_DECL:
+            traverse_and_check_ast(DECL_EXPR_DECL(node), data);
+            break;
+        case VAR_DECL:
+        case PARM_DECL:
+        case FIELD_DECL:
             if (DECL_INITIAL(node)) {
                 traverse_and_check_ast(DECL_INITIAL(node), data);
             }
@@ -380,7 +431,7 @@ static void traverse_and_check_ast(tree node, walk_data* data) {
             // For any other node type we don't recognize, traverse its operands
             // if it is an expression. This is a safe fallback.
             if (TREE_CODE_CLASS(code) == tcc_expression) {
-                 for (int i = 0; i < TREE_OPERAND_LENGTH(node); ++i) {
+                for (int i = 0; i < TREE_OPERAND_LENGTH(node); ++i) {
                     tree op = TREE_OPERAND(node, i);
                     if (op) {
                         traverse_and_check_ast(op, data);
@@ -391,7 +442,6 @@ static void traverse_and_check_ast(tree node, walk_data* data) {
     }
 }
 
-
 // Callback for the PLUGIN_PRE_GENERICIZE event.
 static void pre_genericize_callback(void *gcc_data, void *user_data) {
     (void)user_data;
@@ -401,7 +451,8 @@ static void pre_genericize_callback(void *gcc_data, void *user_data) {
     tree body = DECL_SAVED_TREE(fndecl);
     if (!body) return;
 
-    DEBUG_PRINT("\n--- Processing function: %s ---\n", IDENTIFIER_POINTER(DECL_ASSEMBLER_NAME(fndecl)));
+    DEBUG_PRINT("\n--- Processing function: %s ---\n",
+                IDENTIFIER_POINTER(DECL_ASSEMBLER_NAME(fndecl)));
 
     walk_data data;
     data.function_return_type = TREE_TYPE(DECL_RESULT(fndecl));
@@ -415,10 +466,7 @@ int plugin_init(struct plugin_name_args *plugin_info, struct plugin_gcc_version 
         return 1;
     }
 
-    register_callback(plugin_info->base_name,
-                      PLUGIN_PRE_GENERICIZE,
-                      pre_genericize_callback,
-                      NULL);
+    register_callback(plugin_info->base_name, PLUGIN_PRE_GENERICIZE, pre_genericize_callback, NULL);
 
     return 0;
 }
