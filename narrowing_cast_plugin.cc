@@ -33,7 +33,7 @@
 int plugin_is_GPL_compatible;
 __attribute__((unused))
 static struct plugin_info my_plugin_info = {
-    .version = "8.1-InitExpr-Fix",
+    .version = "8.1-Operand-Type-Fix",
     .help = "Detects 64-to-32 bit narrowing and other lossy numeric conversions.\n"
 };
 
@@ -88,15 +88,53 @@ static tree get_original_type(tree expr) {
                          || TREE_CODE(current_expr) == VIEW_CONVERT_EXPR
                          || TREE_CODE(current_expr) == FLOAT_EXPR
                          || TREE_CODE(current_expr) == FIX_TRUNC_EXPR
+                         || TREE_CODE(current_expr) == NON_LVALUE_EXPR
                          )) {
         current_expr = TREE_OPERAND(current_expr, 0);
         DEBUG_PRINT("      peeled to: %s\n", get_tree_code_name(TREE_CODE(current_expr)));
     }
+    
+    if (!current_expr) return TREE_TYPE(expr);
 
-    tree result_type = current_expr ? TREE_TYPE(current_expr) : TREE_TYPE(expr);
+    // ============================ FIX START ============================
+    // For binary expressions, the node's own type might not be promoted yet.
+    // Instead, deduce the result type by finding the widest operand type.
+    // This correctly handles `int64_t + int` => `int64_t`.
+    switch(TREE_CODE(current_expr)) {
+        case PLUS_EXPR:
+        case MINUS_EXPR:
+        case MULT_EXPR:
+        case TRUNC_DIV_EXPR:
+        case RDIV_EXPR:
+        {
+            tree op0 = TREE_OPERAND(current_expr, 0);
+            tree op1 = TREE_OPERAND(current_expr, 1);
+            if (op0 && op1) {
+                tree type0 = get_original_type(op0);
+                tree type1 = get_original_type(op1);
+                if (is_numeric_type(type0) && is_numeric_type(type1)) {
+                    if (TYPE_PRECISION(type0) > TYPE_PRECISION(type1)) {
+                        DEBUG_PRINT("    deduced binary expr type from operand 0: %s\n", get_type_name(type0));
+                        return type0;
+                    } else {
+                        DEBUG_PRINT("    deduced binary expr type from operand 1: %s\n", get_type_name(type1));
+                        return type1;
+                    }
+                }
+            }
+            break; // Fallthrough to default behavior if operands are weird
+        }
+        default:
+            break; // Do nothing, use default logic below
+    }
+    // ============================= FIX END =============================
+
+
+    tree result_type = TREE_TYPE(current_expr);
     DEBUG_PRINT("    original type is: %s\n", get_type_name(result_type));
     return result_type;
 }
+
 
 // The core logic to detect narrowing conversion.
 static void check_narrowing_conversion(location_t loc, tree to_type, tree from_expr, const char* context) {
@@ -121,17 +159,17 @@ static void check_narrowing_conversion(location_t loc, tree to_type, tree from_e
         unsigned int to_precision = TYPE_PRECISION(to_type);
 
         // Case 1: Standard narrowing conversion (int64 -> int32, double -> float)
-        bool standard_narrowing = (from_precision == 64 && to_precision == 32 && from_code == to_code);
+        bool standard_narrowing = (from_precision > to_precision && from_code == to_code);
         
         // Case 2: int64 -> float (loss of precision)
-        bool int64_to_float = (from_code == INTEGER_TYPE && from_precision == 64 && 
-                               to_code == REAL_TYPE && to_precision == 32);
+        bool int64_to_float = (from_code == INTEGER_TYPE && from_precision > 53 && // float has 24 bits, double 53. Long long definitely loses precision.
+                               to_code == REAL_TYPE);
 
         // Case 3: double -> int32 (loss of precision and range)
-        bool double_to_int32 = (from_code == REAL_TYPE && from_precision == 64 &&
-                                to_code == INTEGER_TYPE && to_precision == 32);
+        bool double_to_int = (from_code == REAL_TYPE && from_precision > to_precision &&
+                                to_code == INTEGER_TYPE);
 
-        if (standard_narrowing || int64_to_float || double_to_int32) {
+        if (standard_narrowing || int64_to_float || double_to_int) {
             DEBUG_PRINT("  >>> POTENTIALLY DANGEROUS CAST DETECTED <<<\n");
             warning_at(loc, 0, "Y2038 potential issue: lossy conversion from %s to %s in %s", 
                        get_type_name(from_type), get_type_name(to_type), context);
@@ -193,17 +231,30 @@ static void traverse_and_check_ast(tree node, walk_data* data) {
             check_narrowing_conversion(loc, TREE_TYPE(lhs), rhs, "assignment");
             break;
         }
-        // FIX: Add a case for INIT_EXPR to catch initializations like `int y = func();`
         case INIT_EXPR: {
             tree dest = TREE_OPERAND(node, 0);
             tree source = TREE_OPERAND(node, 1);
             if (dest && source && TREE_TYPE(dest)) {
-                 // FIX: Get location from the destination variable declaration, which is more reliable.
                  location_t reliable_loc = loc;
                  if (TREE_CODE(dest) == VAR_DECL) {
                      reliable_loc = DECL_SOURCE_LOCATION(dest);
                  }
                  check_narrowing_conversion(reliable_loc, TREE_TYPE(dest), source, "initializer expression");
+            }
+            break;
+        }
+        case CONVERT_EXPR:
+        case NOP_EXPR:
+        case VIEW_CONVERT_EXPR:
+        case FIX_TRUNC_EXPR:
+        case FLOAT_EXPR:
+        {
+            if (EXPR_LOCATION(node) != UNKNOWN_LOCATION && EXPR_LOCATION(node) != BUILTINS_LOCATION) {
+                tree to_type = TREE_TYPE(node);
+                tree from_expr = TREE_OPERAND(node, 0);
+                if (from_expr) {
+                    check_narrowing_conversion(loc, to_type, from_expr, "implicit conversion");
+                }
             }
             break;
         }
@@ -372,6 +423,3 @@ int plugin_init(struct plugin_name_args *plugin_info, struct plugin_gcc_version 
 
     return 0;
 }
-
-
-

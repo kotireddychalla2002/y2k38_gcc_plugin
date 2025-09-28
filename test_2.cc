@@ -14,6 +14,15 @@ int main() {
     (void)y;
 
     take_32_bits_param(return_64bits());
+    int64_t x = 9;
+    int32_t z = x + 1;
+    int32_t z2 = x - 1;
+    int32_t a = x / 1;
+    int32_t b = x * 1;
+    (void)z;
+    (void)z2;
+    (void)a;
+    (void)b;
 
     return 0;
 }
